@@ -1,52 +1,72 @@
 import Foundation
 import PackagePlugin
+#if canImport(XcodeProjectPlugin)
+import XcodeProjectPlugin
+#endif
 
 @main
 struct LicensesPlugin: BuildToolPlugin {
     func createBuildCommands(context: PluginContext, target: Target) async throws -> [Command] {
-        let outputDirectory = context.pluginWorkDirectoryURL.appending(path: "Generated")
-        try FileManager.default.createDirectory(
-            at: outputDirectory,
-            withIntermediateDirectories: true
+        try makeBuildCommands(
+            outputDirectory: context.pluginWorkDirectoryURL.appending(path: "Generated"),
+            entries: context.package.recursiveDependencies().map(\.licenseEntry)
         )
-
-        let outputFile = outputDirectory.appending(path: "GeneratedLicenseCatalogSymbols.swift")
-        let licenses = context.package.recursiveDependencies()
-            .sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-            }
-            .map { $0.generatedLicenseEntry }
-            .joined(separator: ",\n")
-
-        let source = """
-            public enum LicenseCatalog {
-                public struct License: Identifiable, Equatable, Hashable, Sendable {
-                    public let id: String
-                    public let name: String
-                    public let licenseText: String?
-                    public let displayVersion: String?
-                    public let repositoryURL: String?
-                }
-
-                public static var licenses: [License] {
-                    [
-            \(licenses.indented(by: 12))
-                    ]
-                }
-            }
-            """
-
-        try source.write(to: outputFile, atomically: true, encoding: String.Encoding.utf8)
-
-        return [
-            .prebuildCommand(
-                displayName: "Generate license catalog",
-                executable: URL(fileURLWithPath: "/usr/bin/true"),
-                arguments: [],
-                outputFilesDirectory: outputDirectory
-            )
-        ]
     }
+}
+
+#if canImport(XcodeProjectPlugin)
+extension LicensesPlugin: XcodeBuildToolPlugin {
+    func createBuildCommands(context: XcodePluginContext, target: XcodeTarget) throws -> [Command] {
+        try makeBuildCommands(
+            outputDirectory: context.pluginWorkDirectoryURL.appending(path: "Generated"),
+            entries: target.recursiveDependencyLicenseEntries()
+        )
+    }
+}
+#endif
+
+private func makeBuildCommands(outputDirectory: URL, entries: [LicenseEntry]) throws -> [Command] {
+    try FileManager.default.createDirectory(
+        at: outputDirectory,
+        withIntermediateDirectories: true
+    )
+
+    let outputFile = outputDirectory.appending(path: "GeneratedLicenseCatalogSymbols.swift")
+    let licenses = entries
+        .sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        .map(\.generatedSource)
+        .joined(separator: ",\n")
+
+    let source = """
+        public enum LicenseCatalog {
+            public struct License: Identifiable, Equatable, Hashable, Sendable {
+                public let id: String
+                public let name: String
+                public let licenseText: String?
+                public let displayVersion: String?
+                public let repositoryURL: String?
+            }
+
+            public static var licenses: [License] {
+                [
+        \(licenses.indented(by: 8))
+                ]
+            }
+        }
+        """
+
+    try source.write(to: outputFile, atomically: true, encoding: String.Encoding.utf8)
+
+    return [
+        .prebuildCommand(
+            displayName: "Generate license catalog",
+            executable: URL(fileURLWithPath: "/usr/bin/true"),
+            arguments: [],
+            outputFilesDirectory: outputDirectory
+        )
+    ]
 }
 
 private extension Package {
@@ -70,19 +90,39 @@ private extension Package {
     }
 }
 
-private extension Package {
-    var generatedLicenseEntry: String {
+private struct LicenseEntry {
+    let id: String
+    let name: String
+    let licenseText: String?
+    let displayVersion: String?
+    let repositoryURL: String?
+}
+
+private extension LicenseEntry {
+    var generatedSource: String {
         """
         License(
             id: \(String(reflecting: id)),
-            name: \(String(reflecting: displayName)),
+            name: \(String(reflecting: name)),
             licenseText: \(licenseText.map { String(reflecting: $0) } ?? "nil"),
             displayVersion: \(displayVersion.map { String(reflecting: $0) } ?? "nil"),
             repositoryURL: \(repositoryURL.map { String(reflecting: $0) } ?? "nil"),
         )
         """
     }
-    
+}
+
+private extension Package {
+    var licenseEntry: LicenseEntry {
+        LicenseEntry(
+            id: id,
+            name: displayName,
+            licenseText: directoryURL.licenseText,
+            displayVersion: displayVersion,
+            repositoryURL: repositoryURL
+        )
+    }
+
     var displayVersion: String? {
         switch origin {
         case .registry(_, let displayVersion), .repository(_, let displayVersion, _):
@@ -102,6 +142,70 @@ private extension Package {
             nil
         }
     }
+}
+
+#if canImport(XcodeProjectPlugin)
+private extension XcodeTarget {
+    func recursiveDependencyLicenseEntries() -> [LicenseEntry] {
+        var visitedTargetIDs = Set<String>()
+        var visitedProductIDs = Set<String>()
+        var entries: [LicenseEntry] = []
+
+        func collect(_ target: XcodeTarget) {
+            guard visitedTargetIDs.insert(target.id).inserted else {
+                return
+            }
+
+            for dependency in target.dependencies {
+                switch dependency {
+                case .target(let target):
+                    collect(target)
+                case .product(let product):
+                    guard visitedProductIDs.insert(product.id).inserted else {
+                        continue
+                    }
+                    entries.append(product.licenseEntry)
+                @unknown default:
+                    continue
+                }
+            }
+        }
+
+        collect(self)
+        return entries
+    }
+}
+
+private extension Product {
+    var licenseEntry: LicenseEntry {
+        let packageDirectory = targets.compactMap { $0.directoryURL.packageDirectory }.first
+        return LicenseEntry(
+            id: id,
+            name: name,
+            licenseText: packageDirectory?.licenseText,
+            displayVersion: nil,
+            repositoryURL: nil
+        )
+    }
+}
+#endif
+
+private extension URL {
+    var packageDirectory: URL? {
+        var directory = self
+
+        while directory.path != directory.deletingLastPathComponent().path {
+            if FileManager.default.fileExists(atPath: directory.appending(path: "Package.swift").path) {
+                return directory
+            }
+            if directory.licenseText != nil {
+                return directory
+            }
+            directory.deleteLastPathComponent()
+        }
+
+        return nil
+    }
 
     var licenseText: String? {
         let licenseFileNames = [
@@ -114,7 +218,7 @@ private extension Package {
         ]
 
         for fileName in licenseFileNames {
-            let licenseURL = directoryURL.appending(path: fileName)
+            let licenseURL = appending(path: fileName)
             if let text = try? String(contentsOf: licenseURL, encoding: String.Encoding.utf8) {
                 return text
             }
