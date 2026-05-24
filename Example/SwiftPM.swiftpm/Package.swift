@@ -32,7 +32,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(name: "Licenses", path: "../"),
+        .package(name: "Licenses", path: "../../"),
         .package(url: "https://github.com/apple/swift-algorithms.git", "1.2.1"..<"2.0.0"),
     ],
     targets: [
