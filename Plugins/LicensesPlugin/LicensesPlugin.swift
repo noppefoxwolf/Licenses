@@ -17,9 +17,14 @@ struct LicensesPlugin: BuildToolPlugin {
 #if canImport(XcodeProjectPlugin)
 extension LicensesPlugin: XcodeBuildToolPlugin {
     func createBuildCommands(context: XcodePluginContext, target: XcodeTarget) throws -> [Command] {
-        try makeBuildCommands(
+        let entries = target.recursiveDependencyLicenseEntries()
+        return try makeBuildCommands(
             outputDirectory: context.pluginWorkDirectoryURL.appending(path: "Generated"),
-            entries: target.recursiveDependencyLicenseEntries()
+            entries: entries.isEmpty
+                ? context.xcodeProject.resolvedPackageLicenseEntries(
+                    checkoutsDirectory: context.pluginWorkDirectoryURL.sourcePackagesCheckoutsDirectory
+                )
+                : entries
         )
     }
 }
@@ -186,6 +191,81 @@ private extension Product {
             displayVersion: nil,
             repositoryURL: nil
         )
+    }
+}
+
+private extension XcodeProject {
+    func resolvedPackageLicenseEntries(checkoutsDirectory: URL) -> [LicenseEntry] {
+        directoryURL.packageResolvedPins.map { pin in
+            let packageDirectory = checkoutsDirectory
+                .appending(path: pin.location.lastPathComponentWithoutGitSuffix)
+
+            return LicenseEntry(
+                id: pin.identity,
+                name: pin.location.lastPathComponentWithoutGitSuffix,
+                licenseText: packageDirectory.licenseText,
+                displayVersion: pin.state.version,
+                repositoryURL: pin.location
+            )
+        }
+    }
+}
+
+private extension URL {
+    var packageResolvedPins: [PackageResolved.Pin] {
+        let resolvedURLs = [
+            appending(path: "project.xcworkspace/xcshareddata/swiftpm/Package.resolved"),
+            appending(path: "\(lastPathComponent).xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"),
+        ]
+
+        for resolvedURL in resolvedURLs {
+            guard
+                let data = try? Data(contentsOf: resolvedURL),
+                let packageResolved = try? JSONDecoder().decode(PackageResolved.self, from: data)
+            else {
+                continue
+            }
+
+            return packageResolved.pins
+        }
+
+        return []
+    }
+
+    var sourcePackagesCheckoutsDirectory: URL {
+        let components = pathComponents
+
+        guard
+            let buildIndex = components.firstIndex(of: "Build"),
+            buildIndex >= 1
+        else {
+            return deletingLastPathComponent().appending(path: "SourcePackages/checkouts")
+        }
+
+        return URL(fileURLWithPath: components[..<buildIndex].joined(separator: "/"))
+            .appending(path: "SourcePackages/checkouts")
+    }
+}
+
+private struct PackageResolved: Decodable {
+    let pins: [Pin]
+
+    struct Pin: Decodable {
+        let identity: String
+        let location: String
+        let state: State
+    }
+
+    struct State: Decodable {
+        let version: String?
+    }
+}
+
+private extension String {
+    var lastPathComponentWithoutGitSuffix: String {
+        URL(string: self)?.lastPathComponent.replacingOccurrences(of: ".git", with: "")
+            ?? split(separator: "/").last.map(String.init)?.replacingOccurrences(of: ".git", with: "")
+            ?? self
     }
 }
 #endif
