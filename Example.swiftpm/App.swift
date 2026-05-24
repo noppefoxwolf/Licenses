@@ -25,18 +25,27 @@ struct ContentView: View {
 }
 
 struct LicenseSection: View {
-
-    @State
-    var isExpanded: Bool = false
-
     let license: LicenseCatalog.License
 
     var body: some View {
-        Section(license.name + (license.originURL ?? "a"), isExpanded: $isExpanded) {
-            Text(license.licenseText ?? "")
-                .multilineTextAlignment(.leading)
-                .font(.caption2)
-                .monospaced()
-        }
+        NavigationLink(
+            destination: {
+                Text(license.licenseText ?? "")
+                    .multilineTextAlignment(.leading)
+                    .font(.caption2)
+                    .monospaced()
+            },
+            label: {
+                LabeledContent(
+                    content: {
+                        Text(license.displayVersion ?? "")
+                    },
+                    label: {
+                        Text(license.name)
+                            .font(.headline)
+                    }
+                )
+            }
+        )
     }
 }
