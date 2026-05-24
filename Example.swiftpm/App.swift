@@ -30,10 +30,21 @@ struct LicenseSection: View {
     var body: some View {
         NavigationLink(
             destination: {
-                Text(license.licenseText ?? "")
-                    .multilineTextAlignment(.leading)
-                    .font(.caption2)
-                    .monospaced()
+                Group {
+                    if let licenseText = license.licenseText {
+                        ScrollView(.vertical) {
+                            Text(licenseText)
+                        }
+                        .multilineTextAlignment(.leading)
+                        .font(.caption2)
+                        .monospaced()
+                    } else {
+                        ContentUnavailableView("Unknown License", systemImage: "questionmark.app.dashed")
+                    }
+                }
+                .navigationTitle(license.name)
+                .navigationSubtitle(license.repositoryURL ?? "")
+                .navigationBarTitleDisplayMode(.inline)
             },
             label: {
                 LabeledContent(
