@@ -24,7 +24,8 @@ struct LicensesPlugin: BuildToolPlugin {
                     public let id: String
                     public let name: String
                     public let licenseText: String?
-                    public let originURL: String?
+                    public let displayVersion: String?
+                    public let repositoryURL: String?
                 }
 
                 public static var licenses: [License] {
@@ -76,12 +77,24 @@ private extension Package {
             id: \(String(reflecting: id)),
             name: \(String(reflecting: displayName)),
             licenseText: \(licenseText.map { String(reflecting: $0) } ?? "nil"),
-            originURL: \(originURL.map { String(reflecting: $0) } ?? "nil")
+            displayVersion: \(displayVersion.map { String(reflecting: $0) } ?? "nil"),
+            repositoryURL: \(repositoryURL.map { String(reflecting: $0) } ?? "nil"),
         )
         """
     }
+    
+    var displayVersion: String? {
+        switch origin {
+        case .registry(_, let displayVersion), .repository(_, let displayVersion, _):
+            displayVersion
+        case .local, .root:
+            nil
+        @unknown default:
+            nil
+        }
+    }
 
-    var originURL: String? {
+    var repositoryURL: String? {
         switch origin {
         case let .repository(url, _, _):
             url
